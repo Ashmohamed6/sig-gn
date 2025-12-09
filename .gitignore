@@ -1,0 +1,28 @@
+# --- BACKEND PYTHON / DJANGO ---
+venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.sqlite3
+*.log
+
+# Fichiers d'env
+.env
+*.env
+
+# Fichiers générés (collectstatic, etc.)
+staticfiles/
+media/
+
+# --- FRONTEND NODE / REACT / NEXT ---
+sig-gn-frontend/node_modules/
+sig-gn-frontend/.next/
+sig-gn-frontend/.turbo/
+sig-gn-frontend/.env.local
+
+# --- OUTILS / OS / IDE ---
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
