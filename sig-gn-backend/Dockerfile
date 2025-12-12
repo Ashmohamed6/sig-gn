@@ -8,9 +8,12 @@ ENV PYTHONUNBUFFERED=1
 # Dossier de travail dans le conteneur
 WORKDIR /app
 
-# Dépendances système (pour psycopg2, etc.)
+# Dépendances système (psycopg2 + postgresql-client pour wait-for-db)
 RUN apt-get update && \
-    apt-get install -y --no-install-recommends build-essential libpq-dev && \
+    apt-get install -y --no-install-recommends \
+        build-essential \
+        libpq-dev \
+        postgresql-client && \
     rm -rf /var/lib/apt/lists/*
 
 # Installer les dépendances Python
@@ -19,6 +22,9 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 # Copier le code du projet
 COPY . .
+
+# Rendre le script wait-for-db exécutable
+RUN chmod +x wait-for-db.sh
 
 # Port exposé par Django
 EXPOSE 8000
