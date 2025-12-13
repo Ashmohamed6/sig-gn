@@ -2,11 +2,13 @@ services:
   web:
     build: .
     container_name: sig_gn_backend
-    command: ["./wait-for-db.sh", "db", "python", "manage.py", "runserver", "0.0.0.0:8000"]
     ports:
       - "8000:8000"
     volumes:
+      # Monte le code source
       - .:/app
+      # IMPORTANT: Volume nommé pour staticfiles (ne pas écraser)
+      - static_volume:/app/staticfiles
     env_file:
       - .env
     environment:
@@ -15,6 +17,7 @@ services:
       - DB_PASSWORD=${DB_PASSWORD}
       - DB_HOST=db
       - DB_PORT=5432
+      - DJANGO_DEBUG=true  # Force DEBUG à true (en minuscules)
     depends_on:
       db:
         condition: service_healthy
@@ -30,7 +33,6 @@ services:
    
     volumes:
       - postgres_data:/var/lib/postgresql/data
-      # Volume pour vos dumps (optionnel)
       - ./dumps:/dumps
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-postgres}"]
@@ -53,3 +55,5 @@ services:
 
 volumes:
   postgres_data:
+  static_volume:  # ← AJOUTER CETTE LIGNE (elle manque !)
+  

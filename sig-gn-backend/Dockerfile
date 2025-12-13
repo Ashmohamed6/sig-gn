@@ -23,11 +23,18 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copier le code du projet
 COPY . .
 
-# Rendre le script wait-for-db exécutable
-RUN chmod +x wait-for-db.sh
+# Rendre les scripts exécutables
+RUN chmod +x wait-for-db.sh entrypoint.sh
+
+# Créer le dossier staticfiles
+RUN mkdir -p staticfiles
 
 # Port exposé par Django
 EXPOSE 8000
+# Utiliser l'entrypoint au lieu de collectstatic dans le build
+ENTRYPOINT ["./entrypoint.sh"]
+
+#RUN python manage.py collectstatic --noinput
 
 # Commande par défaut : serveur de dev
-CMD ["python", "manage.py", "runserver", "0.0.0.0:8000"]
+#CMD ["python", "manage.py", "runserver", "0.0.0.0:8000"]
