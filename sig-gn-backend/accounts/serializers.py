@@ -1,4 +1,6 @@
+from django.contrib.auth import get_user_model
 from rest_framework import serializers
+from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
 
 from .models import User, RefProject
 
@@ -87,10 +89,45 @@ class LoginSerializer(serializers.Serializer):
     Payload attendu pour /api/accounts/login/ :
 
     {
-      "username": "....",
+      "username": "....",  // peut être un username OU un email
       "password": "...."
     }
     """
 
     username = serializers.CharField()
     password = serializers.CharField(write_only=True)
+
+
+class EmailOrUsernameTokenObtainPairSerializer(TokenObtainPairSerializer):
+    """
+    Serializer utilisé par /api/accounts/token/
+
+    Permet de se connecter avec :
+    - soit le nom d'utilisateur
+    - soit l'adresse e-mail (champ "username" contient alors l'email)
+    """
+
+    @classmethod
+    def get_token(cls, user):
+        token = super().get_token(user)
+        # Infos supplémentaires dans le payload JWT
+        token["username"] = user.username
+        token["email"] = user.email
+        token["role"] = getattr(user, "role", "")
+        return token
+
+    def validate(self, attrs):
+        username = attrs.get("username")
+        UserModel = get_user_model()
+
+        # Si ce qui est passé dans "username" ressemble à un email,
+        # on va chercher le vrai username correspondant.
+        if username and "@" in username:
+            try:
+                u = UserModel.objects.get(email__iexact=username, is_active=True)
+                attrs["username"] = u.username
+            except UserModel.DoesNotExist:
+                # on laisse le username tel quel -> simplejwt renverra une 401 standard
+                pass
+
+        return super().validate(attrs)
