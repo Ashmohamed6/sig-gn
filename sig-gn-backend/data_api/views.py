@@ -8378,7 +8378,7 @@ class MeteoMesureAggregatesView(CurrentProjectRequiredMixin, GenericAPIView):
             where_clauses.append("id_commune = %s")
             params.append(commune_id)
 
-        # Station / mesure
+        # Station
         if code_station:
             where_clauses.append("code_station = %s")
             params.append(code_station)
@@ -8391,6 +8391,7 @@ class MeteoMesureAggregatesView(CurrentProjectRequiredMixin, GenericAPIView):
             where_clauses.append("statut_station = %s")
             params.append(statut_station)
 
+        # Dates
         if date_obs_from:
             where_clauses.append("date_obs >= %s")
             params.append(date_obs_from)
@@ -8399,6 +8400,7 @@ class MeteoMesureAggregatesView(CurrentProjectRequiredMixin, GenericAPIView):
             where_clauses.append("date_obs <= %s")
             params.append(date_obs_to)
 
+        # Statut / géométrie
         if is_active in ("true", "false"):
             where_clauses.append("is_active = %s")
             params.append(is_active == "true")
@@ -8414,16 +8416,18 @@ class MeteoMesureAggregatesView(CurrentProjectRequiredMixin, GenericAPIView):
             where_clauses.append(
                 "("
                 "nom_station ILIKE %s OR "
-                "localite ILIKE %s OR "
-                "obs_pluie ILIKE %s OR "
+                "code_station ILIKE %s OR "
+                "type_station_label ILIKE %s OR "
+                "statut_station_label ILIKE %s OR "
                 "commune_nom ILIKE %s OR "
                 "region_nom ILIKE %s"
                 ")"
             )
             pattern = f"%{search}%"
-            params.extend([pattern] * 5)
+            params.extend([pattern] * 6)
 
         where_sql = " AND ".join(where_clauses)
+
         data: dict = {}
 
         with connection.cursor() as cursor:
@@ -8432,49 +8436,24 @@ class MeteoMesureAggregatesView(CurrentProjectRequiredMixin, GenericAPIView):
                 f"""
                 SELECT
                     COUNT(*) AS nb_mesures,
-                    COUNT(pluie_mm) AS nb_mesures_pluie,
-                    SUM(pluie_mm) AS somme_pluie_mm,
-                    AVG(pluie_mm) AS moyenne_pluie_mm,
-                    MIN(pluie_mm) AS min_pluie_mm,
-                    MAX(pluie_mm) AS max_pluie_mm,
-                    AVG(t_min) AS moyenne_t_min,
-                    AVG(t_max) AS moyenne_t_max,
-                    MIN(t_min) AS min_t_min,
-                    MAX(t_max) AS max_t_max,
-                    MIN(date_obs) AS premiere_date_obs,
-                    MAX(date_obs) AS derniere_date_obs
+                    COUNT(*) FILTER (WHERE pluie_mm IS NOT NULL) AS nb_mesures_pluie,
+                    COALESCE(SUM(pluie_mm), 0) AS somme_pluie_mm,
+                    ROUND(AVG(pluie_mm)::numeric, 2) AS moyenne_pluie_mm,
+                    ROUND(AVG(t_min)::numeric, 2) AS tmin_moy,
+                    ROUND(AVG(t_max)::numeric, 2) AS tmax_moy
                 FROM marts.vw_meteo_mesure
                 WHERE {where_sql}
                 """,
                 params,
             )
             row = cursor.fetchone()
-            nb_mesures = row[0] or 0
-            nb_mesures_pluie = row[1] or 0
-            somme_pluie_mm = row[2]
-            moyenne_pluie_mm = row[3]
-            min_pluie_mm = row[4]
-            max_pluie_mm = row[5]
-            moyenne_t_min = row[6]
-            moyenne_t_max = row[7]
-            min_t_min = row[8]
-            max_t_max = row[9]
-            premiere_date_obs = row[10]
-            derniere_date_obs = row[11]
-
             data["global"] = {
-                "nb_mesures": nb_mesures,
-                "nb_mesures_pluie": nb_mesures_pluie,
-                "somme_pluie_mm": float(somme_pluie_mm) if somme_pluie_mm is not None else None,
-                "moyenne_pluie_mm": float(moyenne_pluie_mm) if moyenne_pluie_mm is not None else None,
-                "min_pluie_mm": float(min_pluie_mm) if min_pluie_mm is not None else None,
-                "max_pluie_mm": float(max_pluie_mm) if max_pluie_mm is not None else None,
-                "moyenne_t_min": float(moyenne_t_min) if moyenne_t_min is not None else None,
-                "moyenne_t_max": float(moyenne_t_max) if moyenne_t_max is not None else None,
-                "min_t_min": float(min_t_min) if min_t_min is not None else None,
-                "max_t_max": float(max_t_max) if max_t_max is not None else None,
-                "premiere_date_obs": premiere_date_obs,
-                "derniere_date_obs": derniere_date_obs,
+                "nb_mesures": row[0] or 0,
+                "nb_mesures_pluie": row[1] or 0,
+                "somme_pluie_mm": float(row[2]) if row[2] is not None else 0.0,
+                "moyenne_pluie_mm": float(row[3]) if row[3] is not None else None,
+                "tmin_moy": float(row[4]) if row[4] is not None else None,
+                "tmax_moy": float(row[5]) if row[5] is not None else None,
             }
 
             # ==== 2) Par région ====
@@ -8486,9 +8465,7 @@ class MeteoMesureAggregatesView(CurrentProjectRequiredMixin, GenericAPIView):
                     COUNT(*) AS nb_mesures,
                     COUNT(pluie_mm) AS nb_mesures_pluie,
                     SUM(pluie_mm) AS somme_pluie_mm,
-                    AVG(pluie_mm) AS moyenne_pluie_mm,
-                    AVG(t_min) AS moyenne_t_min,
-                    AVG(t_max) AS moyenne_t_max
+                    AVG(pluie_mm) AS moyenne_pluie_mm
                 FROM marts.vw_meteo_mesure
                 WHERE {where_sql}
                 GROUP BY id_region, region_nom
@@ -8497,130 +8474,77 @@ class MeteoMesureAggregatesView(CurrentProjectRequiredMixin, GenericAPIView):
                 params,
             )
             rows = cursor.fetchall()
-            by_region = []
-            for r in rows:
-                rid = r[0]
-                rnom = r[1]
-                nb = r[2] or 0
-                nb_p = r[3] or 0
-                s_pluie = r[4]
-                m_pluie = r[5]
-                m_tmin = r[6]
-                m_tmax = r[7]
+            data["by_region"] = [
+                {
+                    "id_region": r[0],
+                    "region_nom": r[1],
+                    "nb_mesures": r[2] or 0,
+                    "nb_mesures_pluie": r[3] or 0,
+                    "somme_pluie_mm": float(r[4]) if r[4] is not None else None,
+                    "moyenne_pluie_mm": float(r[5]) if r[5] is not None else None,
+                }
+                for r in rows
+            ]
 
-                by_region.append(
-                    {
-                        "id_region": rid,
-                        "region_nom": rnom,
-                        "nb_mesures": nb,
-                        "nb_mesures_pluie": nb_p,
-                        "somme_pluie_mm": float(s_pluie) if s_pluie is not None else None,
-                        "moyenne_pluie_mm": float(m_pluie) if m_pluie is not None else None,
-                        "moyenne_t_min": float(m_tmin) if m_tmin is not None else None,
-                        "moyenne_t_max": float(m_tmax) if m_tmax is not None else None,
-                    }
-                )
-            data["by_region"] = by_region
+            # ==== 3) Par commune ====
+            cursor.execute(
+                f"""
+                SELECT
+                    id_commune,
+                    commune_nom,
+                    COUNT(*) AS nb_mesures,
+                    COUNT(pluie_mm) AS nb_mesures_pluie,
+                    SUM(pluie_mm) AS somme_pluie_mm,
+                    AVG(pluie_mm) AS moyenne_pluie_mm
+                FROM marts.vw_meteo_mesure
+                WHERE {where_sql}
+                GROUP BY id_commune, commune_nom
+                ORDER BY commune_nom
+                """,
+                params,
+            )
+            rows = cursor.fetchall()
+            data["by_commune"] = [
+                {
+                    "id_commune": r[0],
+                    "commune_nom": r[1],
+                    "nb_mesures": r[2] or 0,
+                    "nb_mesures_pluie": r[3] or 0,
+                    "somme_pluie_mm": float(r[4]) if r[4] is not None else None,
+                    "moyenne_pluie_mm": float(r[5]) if r[5] is not None else None,
+                }
+                for r in rows
+            ]
 
-            # ==== 3) Par station ====
+            # ==== 4) Par station ====
             cursor.execute(
                 f"""
                 SELECT
                     code_station,
                     nom_station,
-                    type_station,
-                    type_station_label,
-                    id_region,
-                    region_nom,
                     COUNT(*) AS nb_mesures,
                     COUNT(pluie_mm) AS nb_mesures_pluie,
                     SUM(pluie_mm) AS somme_pluie_mm,
-                    AVG(pluie_mm) AS moyenne_pluie_mm,
-                    AVG(t_min) AS moyenne_t_min,
-                    AVG(t_max) AS moyenne_t_max
+                    AVG(pluie_mm) AS moyenne_pluie_mm
                 FROM marts.vw_meteo_mesure
                 WHERE {where_sql}
-                GROUP BY code_station, nom_station, type_station, type_station_label,
-                         id_region, region_nom
-                ORDER BY region_nom, nom_station
+                GROUP BY code_station, nom_station
+                ORDER BY nom_station
                 """,
                 params,
             )
             rows = cursor.fetchall()
-            by_station = []
-            for r in rows:
-                code = r[0]
-                nom = r[1]
-                tcode = r[2]
-                tlabel = r[3]
-                rid = r[4]
-                rnom = r[5]
-                nb = r[6] or 0
-                nb_p = r[7] or 0
-                s_pluie = r[8]
-                m_pluie = r[9]
-                m_tmin = r[10]
-                m_tmax = r[11]
-
-                by_station.append(
-                    {
-                        "code_station": code,
-                        "nom_station": nom,
-                        "type_station": tcode,
-                        "type_station_label": tlabel,
-                        "id_region": rid,
-                        "region_nom": rnom,
-                        "nb_mesures": nb,
-                        "nb_mesures_pluie": nb_p,
-                        "somme_pluie_mm": float(s_pluie) if s_pluie is not None else None,
-                        "moyenne_pluie_mm": float(m_pluie) if m_pluie is not None else None,
-                        "moyenne_t_min": float(m_tmin) if m_tmin is not None else None,
-                        "moyenne_t_max": float(m_tmax) if m_tmax is not None else None,
-                    }
-                )
-            data["by_station"] = by_station
-
-            # ==== 4) Séries temporelles quotidiennes ====
-            cursor.execute(
-                f"""
-                SELECT
-                    date_obs,
-                    COUNT(*) AS nb_mesures,
-                    COUNT(pluie_mm) AS nb_mesures_pluie,
-                    SUM(pluie_mm) AS somme_pluie_mm,
-                    AVG(pluie_mm) AS moyenne_pluie_mm,
-                    AVG(t_min) AS moyenne_t_min,
-                    AVG(t_max) AS moyenne_t_max
-                FROM marts.vw_meteo_mesure
-                WHERE {where_sql}
-                GROUP BY date_obs
-                ORDER BY date_obs
-                """,
-                params,
-            )
-            rows = cursor.fetchall()
-            timeseries_daily = []
-            for r in rows:
-                d = r[0]
-                nb = r[1] or 0
-                nb_p = r[2] or 0
-                s_pluie = r[3]
-                m_pluie = r[4]
-                m_tmin = r[5]
-                m_tmax = r[6]
-
-                timeseries_daily.append(
-                    {
-                        "date_obs": d,
-                        "nb_mesures": nb,
-                        "nb_mesures_pluie": nb_p,
-                        "somme_pluie_mm": float(s_pluie) if s_pluie is not None else None,
-                        "moyenne_pluie_mm": float(m_pluie) if m_pluie is not None else None,
-                        "moyenne_t_min": float(m_tmin) if m_tmin is not None else None,
-                        "moyenne_t_max": float(m_tmax) if m_tmax is not None else None,
-                    }
-                )
-            data["timeseries_daily"] = timeseries_daily
+            data["by_station"] = [
+                {
+                    "code_station": r[0],
+                    "nom_station": r[1],
+                    "nb_mesures": r[2] or 0,
+                    "nb_mesures_pluie": r[3] or 0,
+                    "somme_pluie_mm": float(r[4]) if r[4] is not None else None,
+                    "moyenne_pluie_mm": float(r[5]) if r[5] is not None else None,
+                }
+                for r in rows
+            ]
 
             # ==== 5) Par type de station ====
             cursor.execute(
@@ -8648,7 +8572,6 @@ class MeteoMesureAggregatesView(CurrentProjectRequiredMixin, GenericAPIView):
                 nb_p = r[3] or 0
                 s_pluie = r[4]
                 m_pluie = r[5]
-
                 by_type_station.append(
                     {
                         "type_station": tcode,
@@ -8687,7 +8610,6 @@ class MeteoMesureAggregatesView(CurrentProjectRequiredMixin, GenericAPIView):
                 nb_p = r[3] or 0
                 s_pluie = r[4]
                 m_pluie = r[5]
-
                 by_statut_station.append(
                     {
                         "statut_station": scode,
@@ -8699,6 +8621,34 @@ class MeteoMesureAggregatesView(CurrentProjectRequiredMixin, GenericAPIView):
                     }
                 )
             data["by_statut_station"] = by_statut_station
+
+            # ✅ ==== 7) Par mois (pour le line chart pluie mensuelle) ====
+            cursor.execute(
+                f"""
+                SELECT
+                    to_char(date_trunc('month', date_obs), 'YYYY-MM') AS mois,
+                    COALESCE(SUM(pluie_mm), 0) AS somme_pluie_mm,
+                    ROUND(AVG(t_min)::numeric, 2) AS tmin_moy,
+                    ROUND(AVG(t_max)::numeric, 2) AS tmax_moy,
+                    COUNT(*) AS nb_mesures
+                FROM marts.vw_meteo_mesure
+                WHERE {where_sql}
+                GROUP BY date_trunc('month', date_obs)
+                ORDER BY date_trunc('month', date_obs)
+                """,
+                params,
+            )
+            rows = cursor.fetchall()
+            data["by_month"] = [
+                {
+                    "mois": r[0],
+                    "somme_pluie_mm": float(r[1]) if r[1] is not None else 0.0,
+                    "tmin_moy": float(r[2]) if r[2] is not None else None,
+                    "tmax_moy": float(r[3]) if r[3] is not None else None,
+                    "nb_mesures": r[4] or 0,
+                }
+                for r in rows
+            ]
 
         return Response(data)
 
@@ -10668,24 +10618,11 @@ class TeteSourceListView(CurrentProjectRequiredMixin, GenericAPIView):
 
 class TeteSourceAggregatesView(CurrentProjectRequiredMixin, GenericAPIView):
     """
-    Agrégations sur les têtes de source (marts.vw_tete_source),
-    filtrées par projet actif (FIERE / AGRIECO).
+    Agrégations sur les têtes de sources (marts.vw_tete_source),
+    filtrées par projet actif via project_code (FIERE / AGRIECO).
 
-    Filtres possibles en query string (identiques à TeteSourceListView) :
-    - ?search=...
-    - ?region_id=...
-    - ?prefecture_id=...
-    - ?commune_id=...
-    - ?type_source=...
-    - ?usage_principal=...
-    - ?etat_fonctionnel=...
-    - ?type_protection_code=...
-    - ?protection_exist=true|false
-    - ?entretien_regulier=true|false
-    - ?annee_protection_from=...
-    - ?annee_protection_to=...
-    - ?is_active=true|false
-    - ?has_geom=true|false
+    + Ajout d'une estimation d'accès à l'eau potable :
+      - pop_desservie (Kobo) / population de référence (ref.localite) agrégé par commune.
     """
 
     permission_classes = [IsAuthenticated]
@@ -10696,23 +10633,14 @@ class TeteSourceAggregatesView(CurrentProjectRequiredMixin, GenericAPIView):
             return error_response
 
         project_code = project.code_fonc
-        data: dict = {}
 
-        # -------- Filtres --------
         region_id = request.query_params.get("region_id")
         prefecture_id = request.query_params.get("prefecture_id")
         commune_id = request.query_params.get("commune_id")
 
-        type_source = request.query_params.get("type_source")
-        usage_principal = request.query_params.get("usage_principal")
+        protection_exist = request.query_params.get("protection_exist")  # true/false
+        type_protection = request.query_params.get("type_protection")
         etat_fonctionnel = request.query_params.get("etat_fonctionnel")
-        type_protection_code = request.query_params.get("type_protection_code")
-
-        protection_exist = request.query_params.get("protection_exist")
-        entretien_regulier = request.query_params.get("entretien_regulier")
-
-        annee_protection_from = request.query_params.get("annee_protection_from")
-        annee_protection_to = request.query_params.get("annee_protection_to")
 
         is_active = request.query_params.get("is_active")
         has_geom = request.query_params.get("has_geom")
@@ -10734,40 +10662,18 @@ class TeteSourceAggregatesView(CurrentProjectRequiredMixin, GenericAPIView):
             where_clauses.append("id_commune = %s")
             params.append(commune_id)
 
-        # Typologie tête de source
-        if type_source:
-            where_clauses.append("type_source = %s")
-            params.append(type_source)
-
-        if usage_principal:
-            where_clauses.append("usage_principal = %s")
-            params.append(usage_principal)
-
-        if etat_fonctionnel:
-            where_clauses.append("etat_fonctionnel = %s")
-            params.append(etat_fonctionnel)
-
-        if type_protection_code:
-            where_clauses.append("%s = ANY(type_protection_codes)")
-            params.append(type_protection_code)
-
-        # Booléens
+        # Filtres spécifiques
         if protection_exist in ("true", "false"):
             where_clauses.append("protection_exist = %s")
             params.append(protection_exist == "true")
 
-        if entretien_regulier in ("true", "false"):
-            where_clauses.append("entretien_regulier = %s")
-            params.append(entretien_regulier == "true")
+        if type_protection:
+            where_clauses.append("type_protection = %s")
+            params.append(type_protection)
 
-        # Année de protection
-        if annee_protection_from:
-            where_clauses.append("annee_protection >= %s")
-            params.append(annee_protection_from)
-
-        if annee_protection_to:
-            where_clauses.append("annee_protection <= %s")
-            params.append(annee_protection_to)
+        if etat_fonctionnel:
+            where_clauses.append("etat_fonctionnel = %s")
+            params.append(etat_fonctionnel)
 
         # Statut / géométrie
         if is_active in ("true", "false"):
@@ -10784,58 +10690,41 @@ class TeteSourceAggregatesView(CurrentProjectRequiredMixin, GenericAPIView):
         if search:
             where_clauses.append(
                 "("
-                "id_ts ILIKE %s OR "
                 "localite ILIKE %s OR "
                 "type_source_label ILIKE %s OR "
-                "usage_principal_label ILIKE %s OR "
-                "type_protection_labels ILIKE %s OR "
-                "obs_ts ILIKE %s OR "
+                "type_protection_label ILIKE %s OR "
                 "commune_nom ILIKE %s OR "
                 "region_nom ILIKE %s"
                 ")"
             )
             pattern = f"%{search}%"
-            params.extend([pattern] * 8)
+            params.extend([pattern] * 5)
 
         where_sql = " AND ".join(where_clauses)
+        data: dict = {}
 
         with connection.cursor() as cursor:
             # ==== 1) GLOBAL ====
             cursor.execute(
                 f"""
                 SELECT
-                    COUNT(*) AS nb_ts,
-                    COUNT(*) FILTER (WHERE is_active IS TRUE) AS nb_actives,
+                    COUNT(*) AS nb_tetes_source,
                     COUNT(*) FILTER (WHERE protection_exist IS TRUE) AS nb_protegees,
-                    COUNT(*) FILTER (WHERE entretien_regulier IS TRUE) AS nb_entretien_regulier,
-                    COUNT(geom) AS nb_with_geom,
-                    MIN(annee_protection) AS annee_protection_min,
-                    MAX(annee_protection) AS annee_protection_max
+                    COUNT(*) FILTER (WHERE etat_fonctionnel = 'FONCTIONNEL') AS nb_fonctionnelles,
+                    COUNT(*) FILTER (WHERE geom IS NOT NULL) AS nb_avec_geom,
+                    COALESCE(SUM(pop_desservie), 0) AS pop_desservie_total
                 FROM marts.vw_tete_source
                 WHERE {where_sql}
                 """,
                 params,
             )
             row = cursor.fetchone()
-
-            nb_ts = row[0] or 0
-            nb_actives = row[1] or 0
-            nb_protegees = row[2] or 0
-            nb_entretien_regulier = row[3] or 0
-            nb_with_geom = row[4] or 0
-
             data["global"] = {
-                "nb_tetes_source": nb_ts,
-                "nb_actives": nb_actives,
-                "nb_inactives": nb_ts - nb_actives,
-                "nb_protegees": nb_protegees,
-                "nb_non_protegees": nb_ts - nb_protegees,
-                "nb_entretien_regulier": nb_entretien_regulier,
-                "nb_sans_entretien_regulier": nb_ts - nb_entretien_regulier,
-                "nb_with_geom": nb_with_geom,
-                "nb_without_geom": nb_ts - nb_with_geom,
-                "annee_protection_min": row[5],
-                "annee_protection_max": row[6],
+                "nb_tetes_source": row[0] or 0,
+                "nb_protegees": row[1] or 0,
+                "nb_fonctionnelles": row[2] or 0,
+                "nb_avec_geom": row[3] or 0,
+                "pop_desservie_total": float(row[4]) if row[4] is not None else 0.0,
             }
 
             # ==== 2) Par région ====
@@ -10846,8 +10735,7 @@ class TeteSourceAggregatesView(CurrentProjectRequiredMixin, GenericAPIView):
                     region_nom,
                     COUNT(*) AS nb_ts,
                     COUNT(*) FILTER (WHERE protection_exist IS TRUE) AS nb_protegees,
-                    COUNT(*) FILTER (WHERE entretien_regulier IS TRUE) AS nb_entretien_regulier,
-                    COUNT(geom) AS nb_with_geom
+                    COALESCE(SUM(pop_desservie), 0) AS pop_desservie
                 FROM marts.vw_tete_source
                 WHERE {where_sql}
                 GROUP BY id_region, region_nom
@@ -10856,33 +10744,53 @@ class TeteSourceAggregatesView(CurrentProjectRequiredMixin, GenericAPIView):
                 params,
             )
             rows = cursor.fetchall()
-            by_region = []
-            for r in rows:
-                nb_ts_reg = r[2] or 0
-                nb_prot_reg = r[3] or 0
-                nb_ent_reg = r[4] or 0
-                nb_geom_reg = r[5] or 0
-                by_region.append(
-                    {
-                        "id_region": r[0],
-                        "region_nom": r[1],
-                        "nb_tetes_source": nb_ts_reg,
-                        "nb_protegees": nb_prot_reg,
-                        "nb_entretien_regulier": nb_ent_reg,
-                        "nb_with_geom": nb_geom_reg,
-                    }
-                )
-            data["by_region"] = by_region
+            data["by_region"] = [
+                {
+                    "id_region": r[0],
+                    "region_nom": r[1],
+                    "nb_tetes_source": r[2] or 0,
+                    "nb_protegees": r[3] or 0,
+                    "pop_desservie": float(r[4]) if r[4] is not None else 0.0,
+                }
+                for r in rows
+            ]
 
-            # ==== 3) Par type de source ====
+            # ==== 3) Par commune ====
+            cursor.execute(
+                f"""
+                SELECT
+                    id_commune,
+                    commune_nom,
+                    COUNT(*) AS nb_ts,
+                    COUNT(*) FILTER (WHERE protection_exist IS TRUE) AS nb_protegees,
+                    COALESCE(SUM(pop_desservie), 0) AS pop_desservie
+                FROM marts.vw_tete_source
+                WHERE {where_sql}
+                GROUP BY id_commune, commune_nom
+                ORDER BY commune_nom
+                """,
+                params,
+            )
+            rows = cursor.fetchall()
+            data["by_commune"] = [
+                {
+                    "id_commune": r[0],
+                    "commune_nom": r[1],
+                    "nb_tetes_source": r[2] or 0,
+                    "nb_protegees": r[3] or 0,
+                    "pop_desservie": float(r[4]) if r[4] is not None else 0.0,
+                }
+                for r in rows
+            ]
+
+            # ==== 4) Par type de source ====
             cursor.execute(
                 f"""
                 SELECT
                     type_source,
                     type_source_label,
                     COUNT(*) AS nb_ts,
-                    COUNT(*) FILTER (WHERE protection_exist IS TRUE) AS nb_protegees,
-                    COUNT(*) FILTER (WHERE entretien_regulier IS TRUE) AS nb_entretien_regulier
+                    COUNT(*) FILTER (WHERE protection_exist IS TRUE) AS nb_protegees
                 FROM marts.vw_tete_source
                 WHERE {where_sql}
                 GROUP BY type_source, type_source_label
@@ -10893,46 +10801,19 @@ class TeteSourceAggregatesView(CurrentProjectRequiredMixin, GenericAPIView):
             rows = cursor.fetchall()
             by_type_source = []
             for r in rows:
+                code = r[0]
+                label = r[1]
+                if code is None:
+                    continue
                 by_type_source.append(
                     {
-                        "type_source": r[0],
-                        "type_source_label": r[1],
+                        "type_source_code": code,
+                        "type_source_label": label,
                         "nb_tetes_source": r[2] or 0,
                         "nb_protegees": r[3] or 0,
-                        "nb_entretien_regulier": r[4] or 0,
                     }
                 )
             data["by_type_source"] = by_type_source
-
-            # ==== 4) Par usage principal ====
-            cursor.execute(
-                f"""
-                SELECT
-                    usage_principal,
-                    usage_principal_label,
-                    COUNT(*) AS nb_ts,
-                    COUNT(*) FILTER (WHERE protection_exist IS TRUE) AS nb_protegees,
-                    COUNT(*) FILTER (WHERE entretien_regulier IS TRUE) AS nb_entretien_regulier
-                FROM marts.vw_tete_source
-                WHERE {where_sql}
-                GROUP BY usage_principal, usage_principal_label
-                ORDER BY usage_principal_label
-                """,
-                params,
-            )
-            rows = cursor.fetchall()
-            by_usage_principal = []
-            for r in rows:
-                by_usage_principal.append(
-                    {
-                        "usage_principal": r[0],
-                        "usage_principal_label": r[1],
-                        "nb_tetes_source": r[2] or 0,
-                        "nb_protegees": r[3] or 0,
-                        "nb_entretien_regulier": r[4] or 0,
-                    }
-                )
-            data["by_usage_principal"] = by_usage_principal
 
             # ==== 5) Par état fonctionnel ====
             cursor.execute(
@@ -10949,34 +10830,32 @@ class TeteSourceAggregatesView(CurrentProjectRequiredMixin, GenericAPIView):
                 params,
             )
             rows = cursor.fetchall()
-            by_etat_fonctionnel = []
+            by_etat = []
             for r in rows:
-                by_etat_fonctionnel.append(
+                code = r[0]
+                label = r[1]
+                if code is None:
+                    continue
+                by_etat.append(
                     {
-                        "etat_fonctionnel": r[0],
-                        "etat_fonctionnel_label": r[1],
+                        "etat_fonctionnel_code": code,
+                        "etat_fonctionnel_label": label,
                         "nb_tetes_source": r[2] or 0,
                     }
                 )
-            data["by_etat_fonctionnel"] = by_etat_fonctionnel
+            data["by_etat"] = by_etat
 
-            # ==== 6) Par type de protection (unnest) ====
+            # ==== 6) Par type de protection ====
             cursor.execute(
                 f"""
                 SELECT
-                    u.code AS type_protection_code,
-                    MAX(tp.libelle) AS type_protection_label,
-                    COUNT(DISTINCT ts.id_ts) AS nb_tetes_source,
-                    COUNT(DISTINCT ts.id_ts)
-                        FILTER (WHERE ts.protection_exist IS TRUE) AS nb_tetes_protegees
-                FROM (
-                    SELECT *
-                    FROM marts.vw_tete_source
-                    WHERE {where_sql}
-                ) ts
-                LEFT JOIN LATERAL unnest(ts.type_protection_codes) AS u(code) ON TRUE
-                LEFT JOIN ref.type_protection tp ON tp.code = u.code
-                GROUP BY u.code
+                    type_protection,
+                    type_protection_label,
+                    COUNT(*) AS nb_ts,
+                    COUNT(*) FILTER (WHERE protection_exist IS TRUE) AS nb_protegees
+                FROM marts.vw_tete_source
+                WHERE {where_sql}
+                GROUP BY type_protection, type_protection_label
                 ORDER BY type_protection_label
                 """,
                 params,
@@ -10993,7 +10872,7 @@ class TeteSourceAggregatesView(CurrentProjectRequiredMixin, GenericAPIView):
                         "type_protection_code": code,
                         "type_protection_label": label,
                         "nb_tetes_source": r[2] or 0,
-                        "nb_tetes_protegees": r[3] or 0,
+                        "nb_protegees": r[3] or 0,
                     }
                 )
             data["by_type_protection"] = by_type_protection
@@ -11013,18 +10892,107 @@ class TeteSourceAggregatesView(CurrentProjectRequiredMixin, GenericAPIView):
                 params,
             )
             rows = cursor.fetchall()
-            by_annee_protection = []
-            for r in rows:
-                by_annee_protection.append(
+            data["by_annee_protection"] = [
+                {
+                    "annee_protection": r[0],
+                    "nb_tetes_source": r[1] or 0,
+                    "nb_protegees": r[2] or 0,
+                }
+                for r in rows
+            ]
+
+            # ✅ ==== 8) Accès eau potable (estimation) ====
+            # A) pop_desservie par commune (sources protégées actives)
+            cursor.execute(
+                f"""
+                SELECT
+                    id_commune,
+                    COALESCE(SUM(pop_desservie), 0) AS pop_desservie
+                FROM marts.vw_tete_source
+                WHERE {where_sql}
+                  AND protection_exist IS TRUE
+                  AND is_active IS TRUE
+                  AND id_commune IS NOT NULL
+                GROUP BY id_commune
+                """,
+                params,
+            )
+            rows = cursor.fetchall()
+            desservie_map = {r[0]: float(r[1] or 0) for r in rows}
+
+            # B) population de référence par commune (ref.localite)
+            pop_where = ["1=1"]
+            pop_params: list = []
+
+            if region_id:
+                pop_where.append("ac.id_region = %s")
+                pop_params.append(region_id)
+
+            if prefecture_id:
+                pop_where.append("ac.id_prefecture = %s")
+                pop_params.append(prefecture_id)
+
+            if commune_id:
+                pop_where.append("ac.id_commune = %s")
+                pop_params.append(commune_id)
+
+            pop_where_sql = " AND ".join(pop_where)
+
+            cursor.execute(
+                f"""
+                SELECT
+                    ac.id_commune,
+                    ac.nom AS commune_nom,
+                    COALESCE(SUM(l.population), 0) AS population
+                FROM ref.admin_commune ac
+                LEFT JOIN ref.localite l ON l.id_commune = ac.id_commune
+                WHERE {pop_where_sql}
+                GROUP BY ac.id_commune, ac.nom
+                ORDER BY ac.nom
+                """,
+                pop_params,
+            )
+            pop_rows = cursor.fetchall()
+
+            by_commune = []
+            pop_total = 0.0
+            pop_served_total = 0.0
+
+            for (cid, cname, pop) in pop_rows:
+                pop_val = float(pop or 0)
+                dess_val = float(desservie_map.get(cid, 0.0))
+                served = min(dess_val, pop_val) if pop_val > 0 else dess_val
+
+                taux = round(100.0 * served / pop_val, 2) if pop_val > 0 else None
+
+                by_commune.append(
                     {
-                        "annee_protection": r[0],
-                        "nb_tetes_source": r[1] or 0,
-                        "nb_protegees": r[2] or 0,
+                        "id_commune": cid,
+                        "commune_nom": cname,
+                        "population_reference": pop_val,
+                        "pop_desservie": dess_val,
+                        "taux_acces_pct": taux,
                     }
                 )
-            data["by_annee_protection"] = by_annee_protection
+
+                pop_total += pop_val
+                pop_served_total += served
+
+            taux_global = round(100.0 * pop_served_total / pop_total, 2) if pop_total > 0 else None
+
+            data["access_eau_potable"] = {
+                "population_reference_total": pop_total,
+                "pop_desservie_total_cap": pop_served_total,
+                "taux_acces_global_pct": taux_global,
+                "by_commune": by_commune,
+            }
+
+            # Bonus aussi dans global (pratique côté front)
+            data["global"]["population_reference_total"] = pop_total
+            data["global"]["taux_acces_eau_potable_pct"] = taux_global
 
         return Response(data)
+
 
 
 # -----------------------------------------------------------------------------

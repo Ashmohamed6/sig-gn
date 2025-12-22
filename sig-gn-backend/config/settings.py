@@ -3,6 +3,8 @@ import os
 from pathlib import Path
 import environ
 from datetime import timedelta
+from corsheaders.defaults import default_headers
+
 
 # -----------------------------------------------------------------------------
 # Chemins de base
@@ -213,8 +215,15 @@ SIMPLE_JWT = {
 # -----------------------------------------------------------------------------
 # CORS (à resserrer pour la prod)
 # -----------------------------------------------------------------------------
-CORS_ALLOW_ALL_ORIGINS = True
+CORS_ALLOWED_ORIGINS = [
+    "http://localhost:3000",
+    # ajoute ici d'autres origines plus tard (domaine de prod, etc.)
+]
 
+CORS_ALLOW_HEADERS = list(default_headers) + [
+    "x-project-code",
+]
+CORS_ALLOW_CREDENTIALS = True
 # -----------------------------------------------------------------------------
 # Default primary key field type
 # -----------------------------------------------------------------------------
