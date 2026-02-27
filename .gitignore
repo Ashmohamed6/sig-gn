@@ -9,6 +9,7 @@ __pycache__/
 
 # Fichiers d'env
 .env
+.env_local
 *.env
 
 # Fichiers générés (collectstatic, etc.)

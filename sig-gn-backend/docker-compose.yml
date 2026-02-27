@@ -1,0 +1,59 @@
+services:
+  web:
+    build: .
+    container_name: sig_gn_backend
+    ports:
+      - "8000:8000"
+    volumes:
+      # Monte le code source
+      - .:/app
+      # IMPORTANT: Volume nommé pour staticfiles (ne pas écraser)
+      - static_volume:/app/staticfiles
+    env_file:
+      - .env
+    environment:
+      - DB_NAME=${DB_NAME}
+      - DB_USER=${DB_USER}
+      - DB_PASSWORD=${DB_PASSWORD}
+      - DB_HOST=db
+      - DB_PORT=5432
+      - DJANGO_DEBUG=true  # Force DEBUG à true (en minuscules)
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+
+  db:
+    image: postgis/postgis:17-3.5  
+    container_name: sig_gn_db
+    environment:
+      POSTGRES_USER: ${DB_USER:-postgres}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-postgres}
+      POSTGRES_DB: ${DB_NAME:-sig_gn_db}
+   
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./dumps:/dumps
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-postgres}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  pgadmin:
+    image: dpage/pgadmin4
+    container_name: sig_gn_pgadmin
+    environment:
+      PGADMIN_DEFAULT_EMAIL: admin@siggn.com
+      PGADMIN_DEFAULT_PASSWORD: admin
+    ports:
+      - "8080:80"
+    depends_on:
+      - db
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+  static_volume:  # ← AJOUTER CETTE LIGNE (elle manque !)
+  
